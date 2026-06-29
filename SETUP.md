@@ -115,26 +115,41 @@ pkg-config --modversion opencv4
 Build ExecuTorch from source and install it to `/opt/executorch`.
 
 ```bash
-# Clone — pin to the latest stable tag
+# Clone — check https://github.com/pytorch/executorch/releases for the latest tag
 git clone --branch v0.4.0 https://github.com/pytorch/executorch.git ~/executorch
 cd ~/executorch
 git submodule update --init --recursive
+```
 
-# Python virtualenv for the export tools (also used in step 9)
+### Python virtualenv and install_requirements.sh
+
+> **This step is mandatory.** `install_requirements.sh` generates the flatbuffers-derived
+> C++ headers that the cmake build needs. Skipping it causes configure-time failures
+> with missing includes.
+
+```bash
 python3.11 -m venv ~/.venv/executorch
 source ~/.venv/executorch/bin/activate
 pip install --upgrade pip
 
-# Install PyTorch (CPU-only wheel is sufficient for export tools on the robot)
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+# Install ExecuTorch Python tools and their dependencies.
+# This replaces a bare "pip install torch": it also runs codegen for flatbuffers.
+cd ~/executorch
+./install_requirements.sh
 
-# Install ExecuTorch Python tools with XNNPACK extras
-pip install ".[xnnpack]"
+# XNNPACK python bindings (needed for the export scripts in step 9)
+./install_requirements.sh --pybind xnnpack
+```
 
-# Build the C++ runtime
-mkdir -p ~/executorch/build && cd ~/executorch/build
+### Build the C++ runtime
 
+Use explicit `-S`/`-B` flags so there is no ambiguity about which directory contains
+`CMakeLists.txt` (the repo root, not the build directory).
+
+```bash
 cmake \
+  -S ~/executorch \
+  -B ~/executorch/cmake-out \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX=/opt/executorch \
   -DCMAKE_CXX_COMPILER=clang++ \
@@ -142,11 +157,10 @@ cmake \
   -DEXECUTORCH_BUILD_XNNPACK=ON \
   -DEXECUTORCH_BUILD_EXTENSION_MODULE=ON \
   -DEXECUTORCH_BUILD_EXTENSION_TENSOR=ON \
-  -GNinja \
-  ..
+  -GNinja
 
-ninja -j$(nproc)
-sudo ninja install
+cmake --build ~/executorch/cmake-out -j$(nproc)
+sudo cmake --install ~/executorch/cmake-out --prefix /opt/executorch
 ```
 
 Check that the key libraries are present:
@@ -154,7 +168,7 @@ Check that the key libraries are present:
 ```bash
 ls /opt/executorch/lib/libexecutorch*.a
 # Should list: libexecutorch.a  libexecutorch_core.a
-# and possibly: libxnnpack_backend.a  libextension_module_static.a
+#              libxnnpack_backend.a  libextension_module_static.a
 ```
 
 ---
@@ -195,10 +209,14 @@ ls $QNN_SDK_ROOT/lib/aarch64-ubuntu-gcc9.4/libQnnHtp.so
 
 > **Skip this section if you only need the CPU path.**
 
-```bash
-cd ~/executorch/build
+Re-run cmake against the same source tree, adding the QNN flags.  The existing
+`cmake-out/` directory is reused — cmake incremental builds will only recompile
+what changed.
 
+```bash
 cmake \
+  -S ~/executorch \
+  -B ~/executorch/cmake-out \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX=/opt/executorch \
   -DCMAKE_CXX_COMPILER=clang++ \
@@ -208,11 +226,10 @@ cmake \
   -DEXECUTORCH_BUILD_EXTENSION_TENSOR=ON \
   -DEXECUTORCH_BUILD_QNN=ON \
   -DQNN_SDK_ROOT=$QNN_SDK_ROOT \
-  -GNinja \
-  ..
+  -GNinja
 
-ninja -j$(nproc)
-sudo ninja install
+cmake --build ~/executorch/cmake-out -j$(nproc)
+sudo cmake --install ~/executorch/cmake-out --prefix /opt/executorch
 ```
 
 Confirm the QNN backend library was installed:
@@ -273,21 +290,23 @@ Run the export scripts **on a development machine**, not on the robot.  Copy the
 
 ### Prerequisites (dev machine)
 
+If you ran the build steps on this machine you already have the right virtualenv.
+Activate it and install the remaining Python deps:
+
 ```bash
-python3 -m venv ~/.venv/yolox-export
-source ~/.venv/yolox-export/bin/activate
-pip install --upgrade pip
+source ~/.venv/executorch/bin/activate   # created in step 4
 
-# PyTorch — use whatever version ExecuTorch v0.4.0 was built against
-pip install torch==2.4.0 torchvision==0.19.0
-
-# YOLOX
+# YOLOX Python package (provides the model definition)
 pip install yolox
 
-# ExecuTorch Python tools
+# QNN Python bindings (only needed for export_yolox_qnn.py)
 cd ~/executorch
-pip install ".[xnnpack,qnn]"
+./install_requirements.sh --pybind qnn
 ```
+
+> The `install_requirements.sh` script pins the exact PyTorch version that
+> matches your ExecuTorch checkout, so do **not** install torch separately with
+> a version override — it will conflict.
 
 ### CPU / XNNPACK export
 
@@ -390,6 +409,13 @@ Expected throughput on YOLOX-tiny at 416×416 (rough targets — actual numbers 
 ---
 
 ## Troubleshooting
+
+**`CMake Error: The source directory does not appear to contain CMakeLists.txt`**
+You ran `cmake ..` from inside a subdirectory instead of pointing at the repo root.
+Use the explicit `-S`/`-B` form shown in sections 4 and 6:
+```bash
+cmake -S ~/executorch -B ~/executorch/cmake-out ...
+```
 
 **`find_package(executorch REQUIRED)` fails during colcon build**
 Pass `-DEXECUTORCH_INSTALL_DIR=/opt/executorch` explicitly, or add `/opt/executorch` to `CMAKE_PREFIX_PATH`.
