@@ -1,0 +1,19 @@
+backend: "cpu"  # "cpu" (XNNPACK) or "npu" (QNN HTP)
+
+# Path to .pte model file (relative to CWD or absolute)
+model_path: "models/yolox_tiny_xnnpack.pte"
+
+# QNN-only: path to the directory containing libQnnHtp.so etc.
+# Overrides QNN_SDK_ROOT env var if set.
+qnn_lib_dir: ""
+
+input_width: 416
+input_height: 416
+
+score_threshold: 0.45
+nms_threshold: 0.45
+
+# Topic configuration
+image_topic: "/camera/rgb/image_raw"
+detections_topic: "/detections"
+debug_image_topic: "/detections/image"
