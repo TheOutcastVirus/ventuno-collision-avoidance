@@ -1,0 +1,18 @@
+# Full setup: runtime + model export (YOLOX .pth → .onnx)
+# Install with: pip install -r requirements-export.txt
+#
+# Used by:
+#   tools/export_yolox_onnx.py
+#   scripts/download_models.py  (auto-invoked if models/yolox_tiny.onnx is missing)
+#
+# Not needed at inference time — only for the one-time model export step.
+
+# Runtime deps (same as requirements.txt)
+onnxruntime
+numpy
+opencv-python
+
+# Export-only deps
+torch
+torchvision
+git+https://github.com/Megvii-BaseDetection/YOLOX.git

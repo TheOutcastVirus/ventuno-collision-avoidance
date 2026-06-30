@@ -1,0 +1,5 @@
+# CPU-only runtime dependencies (inference only, no model export)
+# Install with: pip install -r requirements.txt
+onnxruntime
+numpy
+opencv-python

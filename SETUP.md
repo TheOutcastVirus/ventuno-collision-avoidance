@@ -6,210 +6,35 @@ Target platform: **Arduino Ventuno Q** (Qualcomm Snapdragon SoC, Ubuntu 24.04 AR
 
 ## Overview
 
-Two machines are involved in this setup:
+Two machines are involved **only if you need NPU (QNN) inference**. For CPU inference (XNNPACK), everything runs on the Ventuno alone.
 
-| Machine | Role |
-|---------|------|
-| **Host** — x86_64 Ubuntu 22.04 Linux | Python AOT environment: export `.pte` model files, build the QNN x86_64 AOT tooling |
-| **Ventuno Q** — ARM64 Ubuntu 24.04 | C++ inference runtime, ROS 2 nodes, camera driver |
+| Machine | Role | Required for |
+|---------|------|-------------|
+| **Host** — x86_64 Ubuntu 22.04 | Export `.pte` models with QNN backend | NPU path only |
+| **Ventuno Q** — ARM64 Ubuntu 24.04 | C++ inference runtime, ROS 2 nodes, camera driver | Always |
 
-Model export (Python, torch.export) **must** run on the host because the QNN AOT compiler is only distributed for x86_64 Linux. The resulting `.pte` files are then copied to the Ventuno for inference.
-
-The XNNPACK C++ runtime and the ROS 2 workspace are built **natively on the Ventuno** (it is a full Ubuntu system, not an MCU).
+The QNN AOT compiler (model export) is distributed for x86_64 Linux only. Everything else — the C++ runtime, ROS 2 workspace, and XNNPACK model export — runs natively on the Ventuno.
 
 ---
 
 ## Table of Contents
 
-**Host machine**
-1. [System prerequisites (host)](#1-system-prerequisites-host)
-2. [Clone ExecuTorch and init submodules](#2-clone-executorch-and-init-submodules)
-3. [Python virtualenv and install_requirements.sh](#3-python-virtualenv-and-install_requirementssh)
-4. [Qualcomm AI Engine Direct SDK (QAIRT)](#4-qualcomm-ai-engine-direct-sdk-qairt)
-5. [Build ExecuTorch AOT tools + QNN backend (host)](#5-build-executorch-aot-tools--qnn-backend-host)
-6. [Export models to .pte](#6-export-models-to-pte)
+**CPU path (Ventuno only)**
+1. [System prerequisites (Ventuno)](#1-system-prerequisites-ventuno)
+2. [ROS 2 Jazzy](#2-ros-2-jazzy)
+3. [OAK-D Lite / DepthAI SDK](#3-oak-d-lite--depthai-sdk)
+4. [Build ExecuTorch C++ runtime (XNNPACK)](#4-build-executorch-c-runtime-xnnpack)
+5. [Export XNNPACK model (on Ventuno)](#5-export-xnnpack-model-on-ventuno)
+6. [Build this workspace](#6-build-this-workspace)
+7. [Running the nodes](#7-running-the-nodes)
 
-**Ventuno Q**
-7. [System prerequisites (Ventuno)](#7-system-prerequisites-ventuno)
-8. [ROS 2 Jazzy](#8-ros-2-jazzy)
-9. [OAK-D Lite / DepthAI SDK](#9-oak-d-lite--depthai-sdk)
-10. [Build ExecuTorch C++ runtime (XNNPACK)](#10-build-executorch-c-runtime-xnnpack)
-11. [Copy model files to Ventuno](#11-copy-model-files-to-ventuno)
-12. [Build this workspace](#12-build-this-workspace)
-13. [Running the nodes](#13-running-the-nodes)
-
----
-
-## HOST MACHINE
-
----
-
-## 1. System prerequisites (host)
-
-The host must be **x86_64 Ubuntu 22.04**. Ubuntu 24.04 is not officially supported by the QNN SDK for the AOT host tooling.
-
-```bash
-sudo apt update && sudo apt install -y \
-  build-essential \
-  cmake \
-  ninja-build \
-  clang \
-  git \
-  wget \
-  curl \
-  python3.11 \
-  python3.11-dev \
-  python3.11-venv \
-  python3-pip \
-  libssl-dev \
-  pkg-config \
-  flatbuffers-compiler \
-  libflatbuffers-dev
-```
-
----
-
-## 2. Clone ExecuTorch and init submodules
-
-```bash
-git clone https://github.com/pytorch/executorch.git ~/executorch
-cd ~/executorch
-git submodule update --init --recursive
-```
-
----
-
-## 3. Python virtualenv and install_requirements.sh
-
-> **This step is mandatory before any cmake build.** `install_requirements.sh` installs
-> PyTorch nightly and generates the flatbuffers-derived C++ headers the cmake build needs.
-
-```bash
-python3.11 -m venv ~/.venv/executorch
-source ~/.venv/executorch/bin/activate
-pip install --upgrade pip
-
-cd ~/executorch
-./install_requirements.sh
-```
-
-Valid flags for `install_requirements.sh`:
-- `--use-pt-pinned-commit` — build against the exact pinned PyTorch commit instead of nightly
-- `--example` — also install torchvision, torchaudio, and example script dependencies
-
-For QNN Python tools, also install:
-
-```bash
-pip install -r backends/qualcomm/requirements.txt
-```
-
-> Keep the venv active for all subsequent host steps.
-
----
-
-## 4. Qualcomm AI Engine Direct SDK (QAIRT)
-
-> **Skip this section if you only need the CPU/XNNPACK path.**
-
-1. Create a free account at [developer.qualcomm.com](https://developer.qualcomm.com).
-2. Download the **Qualcomm AI Engine Direct SDK** (QAIRT) for Linux from the Software Center.
-   Verified stable version: **QNN 2.37.0**
-3. Extract to a permanent location:
-
-```bash
-sudo mkdir -p /opt/qairt
-sudo unzip qairt-sdk-*.zip -d /opt/qairt --strip-components=1
-# or for tar archives:
-# sudo tar -xf qairt-sdk-*.tar.gz -C /opt/qairt --strip-components=1
-```
-
-4. Source the SDK environment setup script. This sets `LD_LIBRARY_PATH`, `PATH`, and other
-   required variables:
-
-```bash
-source /opt/qairt/bin/envsetup.sh
-```
-
-Add to `~/.bashrc` so it persists across terminals:
-
-```bash
-echo 'export QNN_SDK_ROOT=/opt/qairt' >> ~/.bashrc
-echo 'source $QNN_SDK_ROOT/bin/envsetup.sh' >> ~/.bashrc
-```
-
-Verify the HTP library is present:
-
-```bash
-ls $QNN_SDK_ROOT/lib/x86_64-linux-clang/libQnnHtp.so
-```
-
----
-
-## 5. Build ExecuTorch AOT tools + QNN backend (host)
-
-Use the official build script from the ExecuTorch repo. It builds both the x86_64 AOT
-tools (needed to compile models to `.pte`) and can optionally cross-compile the ARM64
-Linux runtime.
-
-```bash
-cd ~/executorch
-source ~/.venv/executorch/bin/activate
-source $QNN_SDK_ROOT/bin/envsetup.sh
-
-# Build x86_64 AOT tools + QNN backend (mandatory for model export)
-./backends/qualcomm/scripts/build.sh --release
-```
-
-This produces `build-x86/` with the AOT tooling.
-
-To also cross-compile the ARM64 Linux runtime for the Ventuno (requires an OE Linux
-toolchain — skip if building natively on the Ventuno in step 10):
-
-```bash
-export TOOLCHAIN_ROOT_HOST=/path/to/sysroots/x86_64-qtisdk-linux
-export TOOLCHAIN_ROOT_TARGET=/path/to/sysroots/armv8a-oe-linux
-
-./backends/qualcomm/scripts/build.sh --enable_linux_embedded --release
-# Output: build-oe-linux/
-```
-
-After the build, copy the QNN Python bindings so the export scripts can import them:
-
-```bash
-# Already done by build.sh — verify:
-ls ~/executorch/backends/qualcomm/python/
-```
-
----
-
-## 6. Export models to .pte
-
-With the venv active and QNN env sourced:
-
-```bash
-source ~/.venv/executorch/bin/activate
-source $QNN_SDK_ROOT/bin/envsetup.sh
-export PYTHONPATH=~/executorch/..:$PYTHONPATH
-
-cd ~/ventuno-object-tracking
-```
-
-### CPU / XNNPACK export
-
-```bash
-python tools/export_yolox_cpu.py
-# Output: models/yolox_tiny_xnnpack.pte
-```
-
-### NPU / QNN export
-
-```bash
-python tools/export_yolox_qnn.py
-# Output: models/yolox_tiny_qnn.pte
-```
-
-> **Tip:** replace the random calibration data in `export_yolox_qnn.py` with real
-> images from your deployment environment for better quantization accuracy.
+**NPU path (adds x86 host steps)**
+8. [System prerequisites (host)](#8-system-prerequisites-host)
+9. [Clone ExecuTorch (host)](#9-clone-executorch-host)
+10. [Python virtualenv (host)](#10-python-virtualenv-host)
+11. [Build QNN AOT tools (host)](#11-build-qnn-aot-tools-host)
+12. [Export QNN model (host)](#12-export-qnn-model-host)
+13. [Copy QNN runtime libs to Ventuno](#13-copy-qnn-runtime-libs-to-ventuno)
 
 ---
 
@@ -217,7 +42,7 @@ python tools/export_yolox_qnn.py
 
 ---
 
-## 7. System prerequisites (Ventuno)
+## 1. System prerequisites (Ventuno)
 
 ```bash
 sudo apt update && sudo apt install -y \
@@ -230,6 +55,7 @@ sudo apt update && sudo apt install -y \
   wget \
   curl \
   python3-pip \
+  python3-venv \
   libssl-dev \
   libffi-dev \
   pkg-config \
@@ -248,9 +74,7 @@ sudo update-alternatives --install /usr/bin/c++ c++ /usr/bin/clang++ 100
 
 ---
 
-## 8. ROS 2 Jazzy
-
-Follow the official installation guide. The steps below are a condensed version for Ubuntu 24.04.
+## 2. ROS 2 Jazzy
 
 ```bash
 # Locale
@@ -281,13 +105,11 @@ sudo rosdep init && rosdep update
 
 > Do **not** add `source /opt/ros/jazzy/setup.bash` to `~/.bashrc`. Source it
 > explicitly only in terminals where you need ROS, to avoid leaking ROS environment
-> variables into non-ROS builds (e.g. ExecuTorch cmake builds).
+> variables into ExecuTorch cmake builds.
 
 ---
 
-## 9. OAK-D Lite / DepthAI SDK
-
-The `oak_camera` package requires the DepthAI v3 C++ SDK.
+## 3. OAK-D Lite / DepthAI SDK
 
 ```bash
 sudo curl -fL https://artifacts.luxonis.com/artifactory/luxonis-depthai-data-local/public.key \
@@ -302,12 +124,11 @@ sudo apt update && sudo apt install -y libdepthai-dev
 
 ---
 
-## 10. Build ExecuTorch C++ runtime (XNNPACK)
+## 4. Build ExecuTorch C++ runtime (XNNPACK)
 
-Build ExecuTorch natively on the Ventuno. The Ventuno runs full Ubuntu 24.04 so no
-cross-compilation toolchain is needed for the XNNPACK (CPU) backend.
+Build natively on the Ventuno — no cross-compilation toolchain needed.
 
-First, clone ExecuTorch and set up the Python environment:
+**In a clean terminal without ROS sourced:**
 
 ```bash
 git clone https://github.com/pytorch/executorch.git ~/executorch
@@ -320,94 +141,62 @@ pip install --upgrade pip
 ./install_requirements.sh
 ```
 
-Then build the C++ runtime. Run this in a **clean terminal without ROS sourced**:
+> `install_requirements.sh` is required before cmake — it generates the flatbuffers-derived
+> C++ headers that the build system needs.
 
 ```bash
-source ~/.venv/executorch/bin/activate
-
 cmake \
   -S ~/executorch \
   -B ~/executorch/cmake-out \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_INSTALL_PREFIX=/opt/executorch \
-  -DCMAKE_CXX_COMPILER=clang++ \
-  -DCMAKE_C_COMPILER=clang \
+  --preset linux \
   -DEXECUTORCH_BUILD_XNNPACK=ON \
   -DEXECUTORCH_BUILD_EXTENSION_MODULE=ON \
   -DEXECUTORCH_BUILD_EXTENSION_TENSOR=ON \
-  -GNinja
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_INSTALL_PREFIX=/opt/executorch
 
 cmake --build ~/executorch/cmake-out -j$(nproc)
 sudo cmake --install ~/executorch/cmake-out --prefix /opt/executorch
 ```
 
-Verify key libraries are present:
+Verify:
 
 ```bash
 ls /opt/executorch/lib/libexecutorch*.a
-# Should list: libexecutorch.a  libexecutorch_core.a
-#              libxnnpack_backend.a  libextension_module_static.a
-```
-
-### QNN runtime on Ventuno (optional)
-
-If you cross-compiled with `--enable_linux_embedded` on the host in step 5, copy the
-output to the Ventuno:
-
-```bash
-# On host:
-scp -r ~/executorch/build-oe-linux/lib/ ventuno@<robot-ip>:/opt/executorch/
-scp -r ~/executorch/build-oe-linux/include/ ventuno@<robot-ip>:/opt/executorch/
-```
-
-Also copy the QNN SDK runtime libraries (the `.so` files for the target) to the Ventuno:
-
-```bash
-# On host — the exact lib subdirectory depends on your QAIRT version and OE toolchain:
-scp $QNN_SDK_ROOT/lib/aarch64-ubuntu-gcc<version>/libQnnHtp.so ventuno@<robot-ip>:/usr/local/lib/
-scp $QNN_SDK_ROOT/lib/aarch64-ubuntu-gcc<version>/libQnnSystem.so ventuno@<robot-ip>:/usr/local/lib/
-sudo ldconfig  # run on Ventuno after copying
-```
-
-> Check `ls $QNN_SDK_ROOT/lib/` on the host to find the correct aarch64 subdirectory
-> name for your SDK version.
-
----
-
-## 11. Copy model files to Ventuno
-
-From the host machine:
-
-```bash
-scp models/yolox_tiny_xnnpack.pte ventuno@<robot-ip>:~/ventuno-object-tracking/models/
-scp models/yolox_tiny_qnn.pte     ventuno@<robot-ip>:~/ventuno-object-tracking/models/
+# Expected: libexecutorch.a  libexecutorch_core.a
+#           libxnnpack_backend.a  libextension_module_static.a
 ```
 
 ---
 
-## 12. Build this workspace
+## 5. Export XNNPACK model (on Ventuno)
 
-On the Ventuno, source ROS 2 first:
+With the venv active:
+
+```bash
+source ~/.venv/executorch/bin/activate
+export PYTHONPATH=~/executorch:$PYTHONPATH
+
+cd ~/ventuno-object-tracking
+python tools/export_yolox_cpu.py
+# Output: models/yolox_tiny_xnnpack.pte
+```
+
+---
+
+## 6. Build this workspace
+
+Open a new terminal and source ROS 2:
 
 ```bash
 source /opt/ros/jazzy/setup.bash
 
 cd ~/ventuno-object-tracking
-
-# Install any remaining ROS 2 deps declared in package.xml files
 rosdep install --from-paths src --ignore-src -r -y
 
-# CPU-only build (XNNPACK)
 colcon build \
   --cmake-args \
     -DEXECUTORCH_INSTALL_DIR=/opt/executorch \
-    -DCMAKE_BUILD_TYPE=Release
-
-# ── OR ── NPU build (requires QNN runtime libraries installed in step 10)
-colcon build \
-  --cmake-args \
-    -DEXECUTORCH_INSTALL_DIR=/opt/executorch \
-    -DBUILD_QNN_BACKEND=ON \
     -DCMAKE_BUILD_TYPE=Release
 
 source install/setup.bash
@@ -415,9 +204,7 @@ source install/setup.bash
 
 ---
 
-## 13. Running the nodes
-
-Source both ROS 2 and the workspace:
+## 7. Running the nodes
 
 ```bash
 source /opt/ros/jazzy/setup.bash
@@ -427,15 +214,9 @@ source ~/ventuno-object-tracking/install/setup.bash
 ### Camera + detector together (recommended)
 
 ```bash
-# CPU backend
 ros2 launch launch/object_tracking.launch.py \
   backend:=cpu \
   model_path:=$(pwd)/models/yolox_tiny_xnnpack.pte
-
-# NPU backend
-ros2 launch launch/object_tracking.launch.py \
-  backend:=npu \
-  model_path:=$(pwd)/models/yolox_tiny_qnn.pte
 ```
 
 ### Camera only
@@ -462,11 +243,152 @@ rviz2
 
 ---
 
+## NPU PATH (HOST MACHINE)
+
+The steps below are only needed if you want QNN/NPU inference. The host must be
+**x86_64 Ubuntu 22.04** — this is where model export to QNN format happens.
+
+---
+
+## 8. System prerequisites (host)
+
+```bash
+sudo apt update && sudo apt install -y \
+  build-essential \
+  cmake \
+  ninja-build \
+  clang \
+  git \
+  wget \
+  curl \
+  python3.11 \
+  python3.11-dev \
+  python3.11-venv \
+  python3-pip \
+  libssl-dev \
+  pkg-config \
+  flatbuffers-compiler \
+  libflatbuffers-dev
+```
+
+---
+
+## 9. Clone ExecuTorch (host)
+
+```bash
+git clone https://github.com/pytorch/executorch.git ~/executorch
+cd ~/executorch
+git submodule update --init --recursive
+```
+
+---
+
+## 10. Python virtualenv (host)
+
+```bash
+python3.11 -m venv ~/.venv/executorch
+source ~/.venv/executorch/bin/activate
+pip install --upgrade pip
+./install_requirements.sh
+pip install -r backends/qualcomm/requirements.txt
+```
+
+---
+
+## 11. Build QNN AOT tools (host)
+
+The QNN SDK and Android NDK are **auto-downloaded** if `QNN_SDK_ROOT` is not set.
+Use `--skip_linux_android` to skip the Android build — only the x86_64 AOT tools are needed.
+
+```bash
+cd ~/executorch
+source ~/.venv/executorch/bin/activate
+
+./backends/qualcomm/scripts/build.sh --release --skip_linux_android
+# Output: build-x86/ with x86_64 AOT tooling
+```
+
+If you have the SDK already installed at `/opt/qairt`, set `QNN_SDK_ROOT` to skip the
+download:
+
+```bash
+export QNN_SDK_ROOT=/opt/qairt
+./backends/qualcomm/scripts/build.sh --release --skip_linux_android
+```
+
+---
+
+## 12. Export QNN model (host)
+
+```bash
+source ~/.venv/executorch/bin/activate
+export PYTHONPATH=~/executorch:$PYTHONPATH
+
+cd ~/ventuno-object-tracking
+python tools/export_yolox_qnn.py
+# Output: models/yolox_tiny_qnn.pte
+```
+
+> Replace the random calibration data in `export_yolox_qnn.py` with real images from
+> your deployment environment for better quantization accuracy.
+
+Copy the model to the Ventuno:
+
+```bash
+scp models/yolox_tiny_qnn.pte ventuno@<robot-ip>:~/ventuno-object-tracking/models/
+```
+
+---
+
+## 13. Copy QNN runtime libs to Ventuno
+
+The Ventuno needs the QNN `.so` runtime libraries at inference time. Copy the aarch64
+binaries from the SDK on the host:
+
+```bash
+# Find the correct aarch64 lib directory for your SDK version:
+ls $QNN_SDK_ROOT/lib/ | grep aarch64
+
+# Copy runtime libs (adjust directory name to match your SDK version):
+scp $QNN_SDK_ROOT/lib/aarch64-ubuntu-gcc<version>/libQnnHtp.so \
+  ventuno@<robot-ip>:/usr/local/lib/
+scp $QNN_SDK_ROOT/lib/aarch64-ubuntu-gcc<version>/libQnnSystem.so \
+  ventuno@<robot-ip>:/usr/local/lib/
+
+# Run on Ventuno after copying:
+ssh ventuno@<robot-ip> sudo ldconfig
+```
+
+Then rebuild the workspace on the Ventuno with QNN enabled:
+
+```bash
+source /opt/ros/jazzy/setup.bash
+cd ~/ventuno-object-tracking
+
+colcon build \
+  --cmake-args \
+    -DEXECUTORCH_INSTALL_DIR=/opt/executorch \
+    -DBUILD_QNN_BACKEND=ON \
+    -DCMAKE_BUILD_TYPE=Release
+
+source install/setup.bash
+```
+
+Launch with NPU backend:
+
+```bash
+ros2 launch launch/object_tracking.launch.py \
+  backend:=npu \
+  model_path:=$(pwd)/models/yolox_tiny_qnn.pte
+```
+
+---
+
 ## Troubleshooting
 
 **`torch` not found during cmake configure**
-The venv was not active when cmake ran, or `install_requirements.sh` was not run.
-Activate the venv and re-run cmake from a clean terminal without ROS sourced:
+The venv was not active when cmake ran. Activate it and re-run cmake from a clean
+terminal without ROS sourced:
 ```bash
 source ~/.venv/executorch/bin/activate
 unset CMAKE_PREFIX_PATH PYTHONPATH
@@ -474,18 +396,12 @@ cmake -S ~/executorch -B ~/executorch/cmake-out ...
 ```
 
 **`use of executorch build extension module requires executorch build extension data map`**
-A partial or stale executorch install is being imported during the build. Clean and retry:
+Stale install. Clean and retry:
 ```bash
-rm -rf ~/executorch/cmake-out ~/executorch/pip-out
+rm -rf ~/executorch/cmake-out
 pip uninstall executorch -y
 ./install_requirements.sh
 cmake ...
-```
-
-**`CMake Error: The source directory does not appear to contain CMakeLists.txt`**
-Use the explicit `-S`/`-B` form — never run `cmake ..` from inside the build directory:
-```bash
-cmake -S ~/executorch -B ~/executorch/cmake-out ...
 ```
 
 **`find_package(executorch REQUIRED)` fails during colcon build**
@@ -493,21 +409,20 @@ Pass `-DEXECUTORCH_INSTALL_DIR=/opt/executorch` explicitly, or add `/opt/executo
 to `CMAKE_PREFIX_PATH`.
 
 **`Failed to load QNN lib: libQnnHtp.so: cannot open shared object file`**
-The QNN runtime `.so` files are not in `LD_LIBRARY_PATH`. Add the directory containing
-them and run `sudo ldconfig`.
+The QNN runtime `.so` files are missing or not in `LD_LIBRARY_PATH`. Re-run step 13
+and verify `sudo ldconfig` was run on the Ventuno.
 
 **ROS environment leaking into ExecuTorch builds**
-Never source `/opt/ros/jazzy/setup.bash` in the same terminal you use to build
-ExecuTorch. Open a fresh terminal and do not add the ROS source line to `~/.bashrc`.
+Never source `/opt/ros/jazzy/setup.bash` in the terminal used to build ExecuTorch.
+Open a fresh terminal.
 
-**Node crashes immediately with `Failed to load model`**
-Check that the `.pte` file path is correct and that the model was exported with the
-matching backend (an XNNPACK model will fail on the `npu` backend and vice-versa).
+**Node crashes with `Failed to load model`**
+Check that the `.pte` path is correct and matches the backend (XNNPACK model on `npu`
+backend will fail, and vice-versa).
 
 **Low detection rate / missed objects**
 - Lower `score_threshold` in `config/detector.yaml` (default 0.45)
-- Use real calibration images in `export_yolox_qnn.py` instead of random data before
-  re-exporting the QNN model
+- Use real calibration images in `export_yolox_qnn.py` before re-exporting
 
 ---
 
