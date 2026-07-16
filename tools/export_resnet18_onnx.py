@@ -40,6 +40,10 @@ def main():
         output_names=["logits"],
         opset_version=11,
         dynamic_axes={"images": {0: "batch_size"}},
+        # Use the legacy TorchScript exporter: it embeds the weights and honors
+        # opset_version. The newer dynamo exporter (default on torch >= 2.9)
+        # writes weights as external data, yielding a tiny weightless .onnx.
+        dynamo=False,
     )
     print(f"Saved: {output_path}  ({output_path.stat().st_size / 1024:.1f} KB)")
 

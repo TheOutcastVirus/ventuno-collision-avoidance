@@ -374,6 +374,9 @@ _vot_prepend_path LD_LIBRARY_PATH "\$EXECUTORCH_ROOT/build-x86/lib/executorch/ba
 _vot_prepend_path LD_LIBRARY_PATH "\$QAIRT_LIB/aarch64-oe-linux-gcc11.2"
 _vot_prepend_path PYTHONPATH "\$QAIRT_LIB/python"
 _vot_prepend_path PYTHONPATH "\$HOME/Documents"
+# Parent of the ExecuTorch checkout, so \`import executorch\` resolves the
+# /opt/executorch namespace package (needed by the model export/lowering scripts).
+_vot_prepend_path PYTHONPATH "\${EXECUTORCH_ROOT%/*}"
 
 # FastRPC expects semicolon-separated DSP search paths.
 export ADSP_LIBRARY_PATH="\$QAIRT_LIB/hexagon-v75/unsigned;/usr/lib/dsp/cdsp;/usr/lib/rfsa/adsp;/dsp/cdsp;/dsp"
@@ -532,6 +535,17 @@ patch_executorch_for_ventuno() {
     return 1
   fi
 
+  # Enable the QNN AOT pybind adaptor (PyQnnManagerAdaptor) on aarch64. Upstream
+  # only builds it when CMAKE_SYSTEM_PROCESSOR matches x86_64/AMD64, which makes
+  # on-device model lowering impossible. The Ventuno builds and runs ExecuTorch
+  # natively on ARM, so allow the adaptor there too; without it the Python QNN
+  # export flow (tools/export_resnet18_qnn.py) cannot import the QNN compiler.
+  local qnn_cmake="$EXECUTORCH_ROOT/backends/qualcomm/CMakeLists.txt"
+  if [ -f "$qnn_cmake" ] && ! grep -q 'x86_64|AMD64|aarch64' "$qnn_cmake"; then
+    log "Enabling QNN AOT pybind (PyQnnManagerAdaptor) build on aarch64"
+    as_target_user sed -i 's/MATCHES "x86_64|AMD64"/MATCHES "x86_64|AMD64|aarch64|arm64"/' "$qnn_cmake"
+  fi
+
   if grep -q "QCS8300" "$EXECUTORCH_ROOT/backends/qualcomm/serialization/qc_schema.py" 2>/dev/null &&
      grep -q '"QCS8300"' "$EXECUTORCH_ROOT/backends/qualcomm/utils/utils.py" 2>/dev/null; then
     log "ExecuTorch Ventuno/QCS8300 patch already appears to be applied"
@@ -607,6 +621,13 @@ build_executorch() {
   as_target_user bash -lc "cd $(q "$EXECUTORCH_ROOT") && git submodule update --init --recursive"
   as_target_user python3 -m venv "$EXECUTORCH_VENV"
   as_target_user bash -lc "cd $(q "$EXECUTORCH_ROOT") && source $(q "$EXECUTORCH_VENV/bin/activate") && python -m pip install --upgrade pip setuptools wheel && if [ -x ./install_requirements.sh ]; then ./install_requirements.sh; elif [ -f requirements.txt ]; then python -m pip install -r requirements.txt; fi && if [ -f backends/qualcomm/requirements.txt ]; then python -m pip install -r backends/qualcomm/requirements.txt; fi"
+
+  # Extra Python deps the QNN AOT export/lowering path imports but that the base
+  # ExecuTorch requirements do not always pull in: ruamel.yaml + flatbuffers
+  # (exir serialization) and pandas (devtools inspector, imported transitively
+  # by the Qualcomm backend). Without these, tools/export_resnet18_qnn.py fails
+  # to import the QNN compiler even though the runtime backend is built.
+  as_target_user bash -lc "source $(q "$EXECUTORCH_VENV/bin/activate") && python -m pip install ruamel.yaml flatbuffers pandas"
 
   as_target_user bash -lc "cd $(q "$EXECUTORCH_ROOT") && source $(q "$EXECUTORCH_VENV/bin/activate") && cmake -S . -B build-x86 \
     -DCMAKE_BUILD_TYPE=Release \
@@ -686,4 +707,9 @@ ExecuTorch root:
 EOF
 }
 
-main "$@"
+# Only run the full install when executed directly. Sourcing the script exposes
+# the individual stage functions (e.g. build_executorch) without running main,
+# which is useful for re-running a single stage or for debugging.
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+  main "$@"
+fi

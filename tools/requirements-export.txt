@@ -6,4 +6,5 @@
 torch
 torchvision
 onnx
+onnxscript
 pillow
