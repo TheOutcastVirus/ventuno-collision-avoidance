@@ -372,11 +372,10 @@ _vot_prepend_path PATH "\$HOME/.local/bin"
 _vot_prepend_path LD_LIBRARY_PATH "\$EXECUTORCH_ROOT/build-x86/backends/qualcomm"
 _vot_prepend_path LD_LIBRARY_PATH "\$EXECUTORCH_ROOT/build-x86/lib/executorch/backends/qualcomm"
 _vot_prepend_path LD_LIBRARY_PATH "\$QAIRT_LIB/aarch64-oe-linux-gcc11.2"
+# ExecuTorch is imported from its source-layout checkout during QNN model export.
+_vot_prepend_path PYTHONPATH "\$EXECUTORCH_ROOT/src"
 _vot_prepend_path PYTHONPATH "\$QAIRT_LIB/python"
 _vot_prepend_path PYTHONPATH "\$HOME/Documents"
-# Parent of the ExecuTorch checkout, so \`import executorch\` resolves the
-# /opt/executorch namespace package (needed by the model export/lowering scripts).
-_vot_prepend_path PYTHONPATH "\${EXECUTORCH_ROOT%/*}"
 
 # FastRPC expects semicolon-separated DSP search paths.
 export ADSP_LIBRARY_PATH="\$QAIRT_LIB/hexagon-v75/unsigned;/usr/lib/dsp/cdsp;/usr/lib/rfsa/adsp;/dsp/cdsp;/dsp"
@@ -621,13 +620,6 @@ build_executorch() {
   as_target_user bash -lc "cd $(q "$EXECUTORCH_ROOT") && git submodule update --init --recursive"
   as_target_user python3 -m venv "$EXECUTORCH_VENV"
   as_target_user bash -lc "cd $(q "$EXECUTORCH_ROOT") && source $(q "$EXECUTORCH_VENV/bin/activate") && python -m pip install --upgrade pip setuptools wheel && if [ -x ./install_requirements.sh ]; then ./install_requirements.sh; elif [ -f requirements.txt ]; then python -m pip install -r requirements.txt; fi && if [ -f backends/qualcomm/requirements.txt ]; then python -m pip install -r backends/qualcomm/requirements.txt; fi"
-
-  # Extra Python deps the QNN AOT export/lowering path imports but that the base
-  # ExecuTorch requirements do not always pull in: ruamel.yaml + flatbuffers
-  # (exir serialization) and pandas (devtools inspector, imported transitively
-  # by the Qualcomm backend). Without these, tools/export_resnet18_qnn.py fails
-  # to import the QNN compiler even though the runtime backend is built.
-  as_target_user bash -lc "source $(q "$EXECUTORCH_VENV/bin/activate") && python -m pip install ruamel.yaml flatbuffers pandas"
 
   as_target_user bash -lc "cd $(q "$EXECUTORCH_ROOT") && source $(q "$EXECUTORCH_VENV/bin/activate") && cmake -S . -B build-x86 \
     -DCMAKE_BUILD_TYPE=Release \
