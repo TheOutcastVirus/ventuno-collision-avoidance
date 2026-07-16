@@ -1,35 +1,28 @@
 """Full collision-avoidance demo: OAK RGB -> ResNet18 free/blocked -> Create 3.
 
-Starts four nodes:
-  * create3_repub        — bridges the Create 3 base (its topics live in _do_not_use)
-                           to clean root topics, so /cmd_vel actually reaches the base
+Starts three nodes:
   * oak_camera_node      — publishes the RGB stream
   * collision_classifier — classifies each frame free/blocked, publishes
                            /collision/classification (and /collision/image debug overlay)
   * collision_avoider    — drives the base (/cmd_vel): forward when free, turn when blocked
 
-Because we replace the TurtleBot 4's Raspberry Pi, we may need to run
-create3_republisher ourselves — it relays /cmd_vel down to the Create 3 base and
-republishes /odom, /tf, /imu, etc. up to the ROS 2 network. Requires the DDS
-environment to match the base: ROS_DOMAIN_ID and RMW_IMPLEMENTATION=rmw_fastrtps_cpp.
-Set enable_republisher:=false if the base is already at the root namespace.
+The Create 3 runs at the root namespace and subscribes directly to `/cmd_vel`;
+no `create3_republisher` or `/_do_not_use` bridge is required. The DDS environment
+must match the base: ROS_DOMAIN_ID and RMW_IMPLEMENTATION=rmw_fastrtps_cpp.
 
 Defaults to the NPU (QNN) backend, since models/collision_resnet18_qnn.pte is the
 one exported for the Hexagon HTP. Use backend:=cpu with the XNNPACK .pte to run
 on CPU.
 
 Examples:
-    ros2 launch collision_avoidance.launch.py
-    ros2 launch collision_avoidance.launch.py publish_cmd_vel:=false   # dry run
-    ros2 launch collision_avoidance.launch.py blocked_threshold:=0.6   # more cautious
-    ros2 launch collision_avoidance.launch.py backend:=cpu model_path:=models/collision_resnet18_xnnpack.pte
-    ros2 launch collision_avoidance.launch.py enable_republisher:=false  # base at root ns
+    ros2 launch launch/collision_avoidance.launch.py
+    ros2 launch launch/collision_avoidance.launch.py publish_cmd_vel:=false   # dry run
+    ros2 launch launch/collision_avoidance.launch.py blocked_threshold:=0.6   # more cautious
+    ros2 launch launch/collision_avoidance.launch.py backend:=cpu model_path:=models/collision_resnet18_xnnpack.pte
 """
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
-from launch.conditions import IfCondition
-from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.actions import DeclareLaunchArgument
 from launch.substitutions import EnvironmentVariable, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -76,33 +69,7 @@ def generate_launch_description():
         "cmd_vel_topic", default_value="/cmd_vel",
         description="Velocity topic for the Create 3 base (geometry_msgs/Twist)")
 
-    enable_republisher_arg = DeclareLaunchArgument(
-        "enable_republisher", default_value="true",
-        description="Run create3_republisher to bridge the Create 3 base. Set false "
-                    "if the base is bridged elsewhere or configured without _do_not_use")
 
-    robot_ns_arg = DeclareLaunchArgument(
-        "robot_ns", default_value="/_do_not_use",
-        description="Namespace the Create 3 publishes its raw topics under "
-                    "(stock TurtleBot 4 on Jazzy uses /_do_not_use)")
-
-    republisher_ns_arg = DeclareLaunchArgument(
-        "republisher_ns", default_value="/",
-        description="Namespace the bridged clean topics (/cmd_vel, /odom, ...) appear "
-                    "under. Must differ from robot_ns")
-
-    # Bridge the Create 3 base: relays /cmd_vel down to the base and republishes
-    # /odom, /tf, /imu, ... up. Reuses the package's own launch file.
-    create3_republisher = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(PathJoinSubstitution(
-            [FindPackageShare("create3_republisher"), "bringup",
-             "create3_republisher_launch.py"])),
-        launch_arguments={
-            "robot_ns": LaunchConfiguration("robot_ns"),
-            "republisher_ns": LaunchConfiguration("republisher_ns"),
-        }.items(),
-        condition=IfCondition(LaunchConfiguration("enable_republisher")),
-    )
 
     camera_params = PathJoinSubstitution(
         [FindPackageShare("oak_camera"), "config", "camera.yaml"])
@@ -166,10 +133,6 @@ def generate_launch_description():
         turn_speed_arg,
         publish_cmd_vel_arg,
         cmd_vel_topic_arg,
-        enable_republisher_arg,
-        robot_ns_arg,
-        republisher_ns_arg,
-        create3_republisher,
         camera_node,
         classifier_node,
         avoider_node,
