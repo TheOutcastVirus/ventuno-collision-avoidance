@@ -1,0 +1,9 @@
+# Host/export-time dependencies for training and lowering the collision model.
+# NOT needed for on-board inference (that uses the C++ ExecuTorch runtime and
+# requirements.txt). ExecuTorch itself is built from source by
+# scripts/install_ventuno_deps.sh; for the CPU/XNNPACK export on a dev machine
+# install it with:  pip install "executorch[xnnpack]"
+torch
+torchvision
+onnx
+pillow

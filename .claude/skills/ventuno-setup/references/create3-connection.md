@@ -56,12 +56,12 @@ though `tcpdump` shows the base's SPDP arriving on `usb0`. Fix: whitelist the li
 interface with `scripts/fastdds_usb0.xml` (loopback + `192.168.186.3`). See
 [references/ros-networking.md](ros-networking.md) for the general DDS/env details.
 
-DDS env (lives in `~/.bashrc` / `~/.ventuno_object_tracking_env`; must match the Create 3's
+DDS env (lives in `~/.bashrc` / `~/.ventuno_collision_avoidance_env`; must match the Create 3's
 simple/multicast discovery config, so `ROS_DISCOVERY_SERVER` stays unset):
 ```bash
 export ROS_DOMAIN_ID=0
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
-export FASTRTPS_DEFAULT_PROFILES_FILE=$VENTUNO_OBJECT_TRACKING_ROOT/scripts/fastdds_usb0.xml
+export FASTRTPS_DEFAULT_PROFILES_FILE=$VENTUNO_COLLISION_AVOIDANCE_ROOT/scripts/fastdds_usb0.xml
 ```
 
 ## Namespace: no republisher needed
@@ -88,7 +88,7 @@ ros2 node list                             # expect /_internal/mobility, motion_
 ros2 topic info -v /cmd_vel                # Subscription count >= 1 (node motion_control)
 
 # 3. Drive (clear floor / on blocks, OFF the dock)
-ros2 launch object_tracker movement_test.launch.py
+ros2 launch collision_avoider movement_test.launch.py
 ```
 
 ## Troubleshooting — the reboot / one-way-link trap

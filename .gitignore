@@ -5,9 +5,14 @@ log/
 CMakeFiles/
 CMakeCache.txt
 
-# Model files — .pth weights are large and not tracked
+# Model files — trained .pth weights are large and not tracked; the .pte/.onnx
+# artifacts are produced by the export scripts (see models/README.md).
 models/*.pth
-# .onnx is tracked (exported, ready to use, ~20 MB)
+models/*.pte
+models/*.onnx
+
+# Collected datasets (produced by data_collection)
+/dataset/
 
 
 # Python

@@ -1,0 +1,31 @@
+collision_classifier:
+  ros__parameters:
+    backend: "cpu"  # "cpu" (XNNPACK) or "npu" (QNN HTP)
+    model_path: ""  # Empty selects the default model for the chosen backend.
+    qnn_lib_dir: ""
+    input_width: 224
+    input_height: 224
+    image_topic: "/oak/rgb/image_raw"
+    classification_topic: "/collision/classification"
+    debug_image_topic: "/collision/image"
+
+    # ── Classes ─────────────────────────────────────────────────────────────
+    # Must match the ImageFolder class order used at training time. torchvision
+    # sorts class folders alphabetically, so dataset/{blocked,free} yields
+    # index 0 = blocked, 1 = free. We keep an explicit blocked_index so the
+    # controller reads the right probability regardless of label ordering.
+    labels: ["blocked", "free"]
+    blocked_index: 0
+
+    # ── Preprocessing (must match tools/train_collision_resnet18.py) ─────────
+    # ImageNet normalization applied after BGR->RGB and /255 scaling (RGB order).
+    mean: [0.485, 0.456, 0.406]
+    std: [0.229, 0.224, 0.225]
+
+dataset_image_publisher:
+  ros__parameters:
+    dataset_path: "datasets/sample_images"
+    image_topic: "/oak/rgb/image_raw"
+    publish_rate: 15.0
+    loop: true
+    frame_id: "dataset_camera"

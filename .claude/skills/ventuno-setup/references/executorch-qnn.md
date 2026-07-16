@@ -2,24 +2,25 @@
 
 Full working reference target: Ventuno Q, Ubuntu 24.04 Qualcomm image, SoC `QCS8275`
 (soc_id `675`), QAIRT `/opt/qcom/aistack/qairt/2.48.0.260626`, HTP skel libraries
-`hexagon-v75/unsigned`, ROS Jazzy. Verified path: YOLOX-Tiny exported to an ExecuTorch
-`.pte` with QNN HTP delegation, published non-empty detections at ~5 Hz on sample COCO
-images, `/detections/image` for annotated frames.
+`hexagon-v75/unsigned`, ROS Jazzy. Verified path: a ResNet18 free/blocked classifier exported
+to an ExecuTorch `.pte` with QNN HTP delegation, publishing `/collision/classification` at
+~5 Hz on sample images, with `/collision/image` for annotated frames. (The same QNN path was
+originally brought up with YOLOX-Tiny; only the model and pre/post-processing differ.)
 
 The working path end to end:
 
-1. Export YOLOX Tiny to an ExecuTorch `.pte` using the Qualcomm backend (`backend="htp"`).
+1. Export the ResNet18 classifier to an ExecuTorch `.pte` using the Qualcomm backend (`backend="htp"`).
 2. Build the ROS package with `-DBUILD_QNN_BACKEND=ON` so `QnnBackend` is compiled in.
-3. Launch the detector with `backend:=npu` and the QNN-exported model.
+3. Launch the classifier with `backend:=npu` and the QNN-exported model.
 4. The node selects `QnnBackend`, preloads QNN HTP libraries, loads the `.pte`, and runs
    `module_->execute("forward", ...)`.
 
 Key code locations:
-- `src/yolox_detector/launch/dataset_detector.launch.py` — declares `backend` (default `npu`).
-- `src/yolox_detector/src/yolox_detector_node.cpp` — maps `backend == "npu"` to `QnnBackend`.
-- `src/yolox_detector/src/qnn_backend.cpp` — preloads `libQnnSystem.so`, `libQnnHtp.so`,
+- `src/collision_classifier/launch/dataset_classifier.launch.py` — declares `backend` (default `cpu`).
+- `src/collision_classifier/src/collision_classifier_node.cpp` — maps `backend == "npu"` to `QnnBackend`.
+- `src/collision_classifier/src/qnn_backend.cpp` — preloads `libQnnSystem.so`, `libQnnHtp.so`,
   `libQnnHtpPrepare.so`, loads/executes the model.
-- `tools/export_yolox_qnn.py` — exports with `backend="htp"`, `QnnExecuTorchBackendType.kHtpBackend`.
+- `tools/export_resnet18_qnn.py` — exports with `backend="htp"`, `QnnExecuTorchBackendType.kHtpBackend`.
 
 ## Board identification and HTP target
 
@@ -58,7 +59,7 @@ The exact patch is in `scripts/install_ventuno_deps.sh` (`patch_executorch_for_v
 If a newer ExecuTorch revision shifts the diff context so `git apply` fails there, make the
 four edits above manually instead of fighting the patch.
 
-Export models with `--soc-model QCS8300` (see `tools/export_yolox_qnn.py` usage below).
+Export models with `--soc-model QCS8300` (see `tools/export_resnet18_qnn.py` usage below).
 
 ## Building ExecuTorch
 
@@ -126,22 +127,25 @@ The ROS package links `executorch`, `executorch_core`, `extension_module_static`
 
 ```bash
 source "$HOME/.venv/executorch/bin/activate"
-python tools/export_yolox_qnn.py \
-  --weights models/yolox_tiny.pth \
-  --output models/yolox_tiny_qnn.pte \
+python tools/export_resnet18_qnn.py \
+  --weights models/collision_resnet18.pth \
+  --output models/collision_resnet18_qnn.pte \
   --soc-model QCS8300 \
-  --calibration-batches 4
+  --calibration-dir dataset \
+  --calibration-batches 16
 deactivate
 ```
 
-Success looks like `Starting stage: Graph Preparation Initializing` ... `Saved: models/yolox_tiny_qnn.pte`
-(~5.3 MB for YOLOX-Tiny).
+Success looks like `Starting stage: Graph Preparation Initializing` ... `Saved: models/collision_resnet18_qnn.pte`.
+Calibration must feed the same ImageNet-normalized inputs the C++ node uses at runtime
+(`--calibration-dir` points at real collected frames); mismatched calibration yields a
+model that loads but predicts garbage.
 
 ## Building the ROS package with QNN
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-colcon build --packages-select yolox_detector --cmake-args \
+colcon build --packages-select collision_classifier --cmake-args \
   -Dexecutorch_DIR=$EXECUTORCH_ROOT/build-x86/lib/cmake/ExecuTorch \
   -DBUILD_QNN_BACKEND=ON
 ```
@@ -172,37 +176,35 @@ then call `module_->load()` with no argument.
 
 **`find_package(executorch REQUIRED)` fails on optional tokenizer targets** — ExecuTorch's
 CMake package config references optional tokenizer targets this project doesn't use.
-`src/yolox_detector/CMakeLists.txt` predefines those as imported interface libraries before
+`src/collision_classifier/CMakeLists.txt` predefines those as imported interface libraries before
 `find_package(executorch REQUIRED)` to work around it.
 
-**Empty detections at runtime (node loads, `/detections` publishes, but arrays are empty)** —
-two root causes seen together:
-- Preprocessing normalized images to `0..1`, but the model expects BGR float `0..255` with
-  letterbox padding value `114` (`CV_32FC3` after letterboxing, no `1/255` scale).
-- Postprocess treated objectness/class logits as raw probabilities instead of applying sigmoid.
-
-Fix both, and make sure QNN calibration tensors during export match the runtime scale
-(`torch.rand(...) * 255.0`, not `0..1`).
+**Garbage classification at runtime (node loads, `/collision/classification` publishes, but
+scores are meaningless)** — the usual root cause is a preprocessing/calibration mismatch. The
+classifier expects the torchvision pipeline: BGR→RGB, scale `1/255`, then ImageNet mean/std
+normalization (`src/collision_classifier/src/preprocess.cpp` and `tools/collision_model.py`).
+Make sure the QNN calibration during export feeds the **same** normalized inputs
+(`export_resnet18_qnn.py --calibration-dir dataset`, not normalized noise), and that the
+`mean`/`std` params match between the node and the training transform.
 
 ## Runtime verification
 
 ```bash
 ros2 node list
 ros2 topic list
-ros2 topic hz /detections
-ros2 topic echo --once /detections
-ros2 topic echo --once /detections/image --field header
+ros2 topic hz /collision/classification
+ros2 topic echo --once /collision/classification
 
 # Confirm QNN/FastRPC libraries actually loaded into the running process:
-PID=$(pgrep -f yolox_detector_node)
+PID=$(pgrep -f collision_classifier_node)
 grep -E 'libQnn|libcdsprpc|libxdsprpc|hexagon|fastrpc' /proc/$PID/maps | sort -u
 ```
 
-Saving annotated frames (`/detections/image` only publishes with a subscriber):
+Saving annotated frames (`/collision/image` only publishes with a subscriber):
 
 ```bash
 mkdir -p artifacts/annotated && cd artifacts/annotated
-ros2 run image_view image_saver --ros-args -r image:=/detections/image
+ros2 run image_view image_saver --ros-args -r image:=/collision/image
 ```
 
 ## Replicating on a different/new Ventuno Q
@@ -215,8 +217,8 @@ the script diverges from a known-good board:
    assuming V75 still applies.
 2. `sudo apt-get install -y qcom-fastrpc1 qcom-fastrpc-dev`.
 3. Confirm QAIRT/QNN SDK path and libraries exist; update `QNN_SDK_ROOT` in
-   `~/.ventuno_object_tracking_env` if the version differs from `2.48.0.260626`.
-4. Confirm `~/.ventuno_object_tracking_env` is created and sourced from `~/.bashrc` before
+   `~/.ventuno_collision_avoidance_env` if the version differs from `2.48.0.260626`.
+4. Confirm `~/.ventuno_collision_avoidance_env` is created and sourced from `~/.bashrc` before
    any non-interactive-shell early return (SSH one-liners need it).
 5. ExecuTorch checkout at `/opt/executorch`; apply the `QCS8300` patch above.
 6. Build ExecuTorch, export the model, build the ROS package, launch — same commands as above.

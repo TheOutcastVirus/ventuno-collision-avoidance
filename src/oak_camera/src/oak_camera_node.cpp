@@ -143,8 +143,8 @@ void OakCameraNode::buildPipeline()
   }
 
   // StereoDepth consumes its own synchronized mono outputs even when the raw
-  // mono topics are disabled. ImageAlign makes the output pixel-for-pixel
-  // compatible with RGB YOLOX detection boxes.
+  // mono topics are disabled. ImageAlign makes the depth output pixel-for-pixel
+  // aligned with the RGB frame.
   if (enable_depth_) {
     auto left_cam = dai_->pipeline.create<dai::node::Camera>();
     left_cam->build(dai::CameraBoardSocket::CAM_B);

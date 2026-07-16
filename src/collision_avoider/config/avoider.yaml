@@ -1,0 +1,26 @@
+collision_avoider:
+  ros__parameters:
+    classification_topic: "/collision/classification"
+    blocked_label: "blocked"
+
+    # Decision threshold on the smoothed P(blocked). Higher = more cautious
+    # (turns away sooner); lower = drives forward more readily.
+    blocked_threshold: 0.5
+
+    # Motion. Kept within a cautious indoor range.
+    base_speed: 0.15          # m/s forward when the path is free
+    turn_speed: 0.6           # rad/s in-place rotation when blocked
+    turn_direction: 1.0       # +1 = turn left (CCW), -1 = turn right
+
+    # EMA weight on each new P(blocked) sample (0..1). Higher = more responsive,
+    # lower = smoother/steadier.
+    prob_smoothing: 0.5
+
+    # Safety caps applied to the published Twist.
+    max_linear_speed: 0.25    # m/s
+    max_angular_speed: 1.5    # rad/s
+
+    lost_timeout: 0.5         # s without a classification before we stop
+    control_rate: 10.0        # Hz control loop
+    cmd_vel_topic: "/cmd_vel" # Create 3 base (geometry_msgs/Twist)
+    publish_cmd_vel: true     # false = dry run (log commands, don't move)
