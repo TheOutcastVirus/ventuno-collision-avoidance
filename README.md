@@ -150,11 +150,11 @@ ros2 topic echo /collision/classification    # in another shell
 Then run the full collision-avoidance demo on the robot:
 
 ```bash
-ros2 launch collision_avoidance.launch.py                        # NPU backend
-ros2 launch collision_avoidance.launch.py backend:=cpu \
-    model_path:=models/collision_resnet18_xnnpack.pte            # CPU fallback
-ros2 launch collision_avoidance.launch.py publish_cmd_vel:=false # dry run, no motion
-ros2 launch collision_avoidance.launch.py blocked_threshold:=0.6 # more cautious
+ros2 launch launch/collision_avoidance.launch.py                        # NPU backend
+ros2 launch launch/collision_avoidance.launch.py backend:=cpu \
+    model_path:=models/collision_resnet18_xnnpack.pte                   # CPU fallback
+ros2 launch launch/collision_avoidance.launch.py publish_cmd_vel:=false # dry run, no motion
+ros2 launch launch/collision_avoidance.launch.py blocked_threshold:=0.6 # more cautious
 ```
 
 The robot drives forward while `free` and turns in place when `blocked`. Tune `base_speed`,
