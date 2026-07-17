@@ -1,5 +1,7 @@
 # Ventuno Collision Avoidance
 
+![Collision avoidance demo](docs/images/collision-avoidance-demo.gif)
+
 A JetBot-style **collision-avoidance** robot demo built on a
 [TurtleBot 4](https://clearpathrobotics.com/turtlebot-4/), with the stock Raspberry Pi replaced
 by an **Arduino Ventuno Q** board. A small neural network learns to tell "free" from "blocked"
