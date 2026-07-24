@@ -2,8 +2,8 @@
 
 > **Subheading:** A JetBot-style collision-avoidance robot. You drive it around, label a
 > few hundred camera frames "free" or "blocked," and a small neural network learns your
-> space. It then wanders on its own without bumping into things — the classifier running on
-> the Arduino Ventuno Q's Hexagon NPU, no cloud, no laptop, no depth sensor.
+> space. It then wanders on its own without bumping into things, with the classifier running
+> on the Arduino Ventuno Q's Hexagon NPU: no cloud, no laptop, no depth sensor.
 
 ![The robot driving forward on a clear path and turning away when it sees an obstacle](images/collision-avoidance-demo.gif)
 
@@ -37,7 +37,7 @@ SDK · DepthAI · PyTorch + torchvision · C++ / Python 3
 ## Intro
 
 There are two ways to keep a robot from driving into a wall. The obvious one is to give it
-a distance sensor — lidar, ultrasonics, a depth camera — and stop when something gets close.
+a distance sensor (lidar, ultrasonics, a depth camera) and stop when something gets close.
 The more interesting one, and the one NVIDIA's [JetBot](https://github.com/NVIDIA-AI-IOT/jetbot)
 made famous, is to skip the sensor entirely and let the robot *learn what trouble looks
 like* from a plain camera.
@@ -46,10 +46,10 @@ This project is that second approach, running on an **Arduino Ventuno Q**.
 
 Like our [object-following demo](https://github.com/TheOutcastVirus/ventuno-object-tracking),
 it starts with a TurtleBot 4 whose Raspberry Pi has been pulled out and replaced with a
-Ventuno Q — an ARM board with a Qualcomm **Hexagon NPU** for neural network inference. But
+Ventuno Q, an ARM board with a Qualcomm **Hexagon NPU** for neural network inference. But
 where that project detected and chased objects, this one does something conceptually
 simpler and, in a way, more fun: it looks at the single image in front of it and answers one
-yes/no question — *is the path ahead free, or blocked?* — thirty times a second, and steers
+yes/no question (*is the path ahead free, or blocked?*) thirty times a second, and steers
 on the answer.
 
 The catch, and the charm, is that **you have to teach it.** There's no pre-trained model to
@@ -59,13 +59,13 @@ and a short training run later, the robot knows your space.
 
 ## What it does
 
-- **Sees with one camera.** An OAK-D Lite streams RGB into ROS 2. No depth, no lidar — just
+- **Sees with one camera.** An OAK-D Lite streams RGB into ROS 2. No depth, no lidar, just
   the picture.
 - **Classifies free vs. blocked on the NPU.** A ResNet18, transfer-learned into a two-class
   classifier, runs through ExecuTorch on the Hexagon NPU via Qualcomm's QNN HTP backend at
   around 5 Hz.
 - **Drives reactively.** A dead-simple controller drives the Create 3 base forward while the
-  path reads *free*, and turns in place when it reads *blocked* — exactly the JetBot
+  path reads *free*, and turns in place when it reads *blocked*, exactly the JetBot
   behavior.
 - **Smooths its own nerves.** The blocked probability is EMA-filtered so one jumpy frame
   doesn't send the robot spinning.
@@ -105,32 +105,32 @@ OAK-D Lite ──RGB──▶ oak_camera ──/oak/rgb/image_raw──▶ colli
 <!-- IMAGE: replace the ASCII sketch with a proper block diagram before publishing -->
 
 Three ROS 2 nodes, launched together by `launch/collision_avoidance.launch.py`. Notably,
-there's **no republisher node** here — unlike some TurtleBot 4 compute swaps, the Create 3
+there's **no republisher node** here: unlike some TurtleBot 4 compute swaps, the Create 3
 sits at the root namespace and takes `/cmd_vel` directly, so nothing has to bridge the
 `_do_not_use` topics. The DDS environment does still have to match the base
 (`ROS_DOMAIN_ID`, `RMW_IMPLEMENTATION=rmw_fastrtps_cpp`).
 
-### `oak_camera` — the eye
+### `oak_camera`: the eye
 
 A DepthAI driver publishing the OAK-D Lite's RGB stream. That's all this project needs from
-it — no stereo depth, no alignment. One camera, one job.
+it: no stereo depth, no alignment. One camera, one job.
 
-### `collision_classifier` — the judgment
+### `collision_classifier`: the judgment
 
 A C++ node running a ResNet18 binary classifier through ExecuTorch, with two interchangeable
 backends chosen by a `backend` parameter: `npu` (QNN HTP) or `cpu` (XNNPACK). Each frame is
 resized to 224×224, converted BGR→RGB, scaled to [0,1], and normalized with the standard
-ImageNet mean/std before inference — and that normalization has to match what training did
+ImageNet mean/std before inference, and that normalization has to match what training did
 *exactly*, or the model sees inputs it was never trained on.
 
 There's a subtle ordering trap the code is careful about. torchvision's `ImageFolder` sorts
 class folders alphabetically, so `dataset/{blocked,free}` makes **index 0 = blocked, index 1
-= free** — not the order you'd guess from the JetBot convention. The node keeps an explicit
-`blocked_index` so the controller always reads the right probability regardless of how the
-labels happen to sort. It publishes both class scores on `/collision/classification`, plus
-an annotated `/collision/image` you can watch live.
+= free**, which is not the order you'd guess from the JetBot convention. The node keeps an
+explicit `blocked_index` so the controller always reads the right probability regardless of
+how the labels happen to sort. It publishes both class scores on `/collision/classification`,
+plus an annotated `/collision/image` you can watch live.
 
-### `collision_avoider` — the reflex
+### `collision_avoider`: the reflex
 
 A Python node, and deliberately about as simple as a controller can be. It pulls P(blocked)
 out of each classification, smooths it with an EMA so a single noisy frame can't jerk the
@@ -145,7 +145,7 @@ else:
 ```
 
 Forward when free, turn in place when blocked, look again. It runs at 10 Hz, clamps every
-command to safe indoor speed caps, and — the important part — stops dead if no classification
+command to safe indoor speed caps, and (the important part) stops dead if no classification
 has arrived in the last half second. A perception stack that silently dies should leave you
 with a stopped robot, not a runaway one.
 
@@ -164,7 +164,7 @@ ros2 launch collision_avoider data_collection.launch.py
 
 `f` saves the current frame as **free**, `b` saves it as **blocked**, `q` quits. Frames land
 in `dataset/free/` and `dataset/blocked/` as 224×224 JPEGs. Aim for roughly balanced classes,
-~100+ each, across different orientations, lighting, obstacles, and floor textures — the more
+~100+ each, across different orientations, lighting, obstacles, and floor textures; the more
 your dataset looks like the messy reality of your room, the better the robot behaves in it.
 
 ### 2. Train
@@ -192,7 +192,7 @@ python3 tools/export_resnet18_qnn.py \
 The `--calibration-dir dataset` is not optional. QNN's 8-bit quantization calibrates its
 numeric ranges by running real inputs through the model, and those inputs have to be
 normalized the same way the runtime normalizes them. Skip it and the quantized model loads
-happily and then predicts **garbage** — a failure that looks like a bug everywhere except
+happily and then predicts **garbage**: a failure that looks like a bug everywhere except
 where it actually is. (`--soc-model QCS8300` is the other board-specific detail: the Ventuno's
 chipset validates as HTP V75, which the project maps onto ExecuTorch's `QCS8300` target.)
 
@@ -201,7 +201,8 @@ ONNX export for inspection.
 
 ### 4. Run
 
-Sanity-check the classifier offline first, on the bundled sample images — no camera, no robot:
+Sanity-check the classifier offline first, on the bundled sample images, with no camera and
+no robot:
 
 ```bash
 ros2 launch collision_classifier dataset_classifier.launch.py backend:=cpu
@@ -242,7 +243,7 @@ things, at the cost of occasionally shying away from clear paths.
 
 **QNN calibration silently poisoning the model.** The single nastiest bug in the project:
 export the NPU model without pointing calibration at real, correctly-normalized frames and it
-runs fine and predicts nonsense. No crash, no error — just a robot that thinks the open floor
+runs fine and predicts nonsense. No crash, no error, just a robot that thinks the open floor
 is a wall. Getting calibration inputs to match runtime preprocessing exactly is the whole
 game with quantized NPU models.
 
@@ -255,13 +256,13 @@ means index 0 is *blocked*, which is the opposite of what most people assume. An
 `blocked_index` threaded through the classifier and controller keeps everyone honest.
 
 **Standing up ExecuTorch + QNN on the board at all.** Shared with the object-tracking
-project and written up in `.claude/skills/ventuno-setup/references/executorch-qnn.md` —
+project and written up in `.claude/skills/ventuno-setup/references/executorch-qnn.md`:
 unrecognised chipset, HTP version, FastRPC/DSP paths, on-device ExecuTorch build.
 
 ## What's next
 
-- More than two classes — a "ledge/dropoff" class, or per-direction free/blocked so it can
-  steer rather than just spin
+- More than two classes, such as a "ledge/dropoff" class, or per-direction free/blocked so it
+  can steer rather than just spin
 - A short memory so it doesn't oscillate in a corner
 - Combining the learned classifier with the object-follower for a robot that chases you *and*
   dodges furniture
@@ -270,8 +271,8 @@ unrecognised chipset, HTP version, FastRPC/DSP paths, on-device ExecuTorch build
 ## Links
 
 - **Repo:** https://github.com/TheOutcastVirus/ventuno-collision-avoidance
-- **Companion project:** [ventuno-object-tracking](https://github.com/TheOutcastVirus/ventuno-object-tracking)
-  — same board, same setup, object-following instead of obstacle-avoidance
-- **Board setup and debugging notes:** `.claude/skills/ventuno-setup/` — full ExecuTorch/QNN
+- **Companion project:** [ventuno-object-tracking](https://github.com/TheOutcastVirus/ventuno-object-tracking):
+  same board, same setup, object-following instead of obstacle-avoidance
+- **Board setup and debugging notes:** `.claude/skills/ventuno-setup/`, covering full ExecuTorch/QNN
   bring-up, the Create 3 connection, and DDS tuning, written as a plain-markdown agent skill
   that a coding agent (or a human) can read to debug the board.
